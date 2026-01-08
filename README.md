@@ -42,13 +42,30 @@ A web application that monitors List.am for new apartment listings and displays 
    - **Start Command**: `python app.py`
    - **Plan**: Free tier is fine for this
 
-4. **Environment Variables** (important!)
+4. **Create a PostgreSQL Database** (for persistent storage)
+   - In Render dashboard, click "New +" → "PostgreSQL"
+   - **Name**: list-am-db (or any name)
+   - **Database**: list_am (or any name)
+   - **User**: Will be auto-generated
+   - **Region**: Same as your web service
+   - **Plan**: Free tier is fine
+   - Click "Create Database"
+   - **Important**: Copy the "Internal Database URL" - you'll need it
+
+5. **Link Database to Web Service**
+   - Go to your Web Service settings
+   - Scroll to "Connections" section
+   - Click "Link" next to your PostgreSQL database
+   - This automatically sets the `DATABASE_URL` environment variable
+
+6. **Environment Variables** (important!)
    - **LIST_AM_URL**: Set this to your filtered List.am URL (e.g., `https://www.list.am/category/60?param1=value1&param2=value2`)
      - Go to List.am, apply your filters, copy the full URL from the address bar
      - In Render dashboard, go to Environment → Add Environment Variable
      - Key: `LIST_AM_URL`
      - Value: Your filtered URL
    - **CHECK_INTERVAL**: How often to check (in minutes, default: 30)
+   - **DATABASE_URL**: Automatically set when you link the database (don't set manually)
    - **PORT**: Automatically set by Render (don't change this)
 
 5. **Deploy**
@@ -112,15 +129,12 @@ You can modify the following in `app.py`:
 
 ## Notes
 
-- **Data Persistence**: On Render's free tier, the filesystem is ephemeral. The `listings_data.json` file persists during the service's lifetime but will be lost if the service restarts. When this happens, the app will re-initialize the baseline on the first check (so you won't see "new" listings until actual new ones appear after the baseline is set).
-- New listings are kept in memory (last 100 listings)
+- **Data Persistence**: The app uses PostgreSQL for persistent storage. All baseline listings and new listings are stored in the database and will persist across restarts.
+- **Fallback**: If no database is configured, the app falls back to file-based storage (data will be lost on restart)
+- New listings are kept in the database (last 100 shown on the web interface)
 - The page auto-refreshes every 5 minutes
 - Make sure your filters are applied in the URL before deploying
-
-**For persistent storage** (optional):
-- You can add a PostgreSQL database on Render (free tier available)
-- Or use Render's persistent disk (paid feature)
-- The current file-based approach works fine for most use cases - the baseline just resets on restart
+- The database tables are automatically created on first run
 
 ## Troubleshooting
 

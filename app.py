@@ -7,6 +7,9 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 import threading
 import time
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 
@@ -15,23 +18,99 @@ LIST_AM_URL = os.environ.get('LIST_AM_URL', "https://www.list.am/category/60")
 CHECK_INTERVAL = int(os.environ.get('CHECK_INTERVAL', 30))  # minutes
 DATA_FILE = os.environ.get('DATA_FILE', "listings_data.json")
 
-# Store for new listings
+# Database configuration
+DATABASE_URL = os.environ.get('DATABASE_URL')  # Render provides this automatically
+
+# Store for new listings (in-memory cache)
 new_listings = []
 last_check_time = None
 is_checking = False
 
-def load_baseline():
-    """Load the baseline listing IDs from environment variable or file"""
-    # Try environment variable first (persists on Render)
-    baseline_env = os.environ.get('BASELINE_LISTINGS')
-    if baseline_env:
-        try:
-            data = json.loads(baseline_env)
-            return set(data.get('listing_ids', []))
-        except:
-            pass
+def get_db_connection():
+    """Get database connection"""
+    if not DATABASE_URL:
+        return None
+    try:
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+        return conn
+    except Exception as e:
+        print(f"Database connection error: {e}")
+        return None
+
+def init_database():
+    """Initialize database tables"""
+    conn = get_db_connection()
+    if not conn:
+        return False
     
-    # Fallback to file (for local development)
+    try:
+        cur = conn.cursor()
+        
+        # Create baseline table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS baseline_listings (
+                id SERIAL PRIMARY KEY,
+                listing_id VARCHAR(50) UNIQUE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Create new_listings table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS new_listings (
+                id SERIAL PRIMARY KEY,
+                listing_id VARCHAR(50) NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT,
+                price VARCHAR(50),
+                location TEXT,
+                description TEXT,
+                detected_at TIMESTAMP NOT NULL
+            )
+        """)
+        
+        # Create index for faster lookups
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_baseline_listing_id 
+            ON baseline_listings(listing_id)
+        """)
+        
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_new_listings_detected_at 
+            ON new_listings(detected_at DESC)
+        """)
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        print("Database initialized successfully")
+        return True
+    except Exception as e:
+        print(f"Error initializing database: {e}")
+        if conn:
+            conn.close()
+        return False
+
+def load_baseline():
+    """Load the baseline listing IDs from database or file fallback"""
+    # Try database first
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT listing_id FROM baseline_listings")
+            rows = cur.fetchall()
+            listing_ids = {row[0] for row in rows}
+            cur.close()
+            conn.close()
+            print(f"Loaded {len(listing_ids)} baseline listings from database")
+            return listing_ids
+        except Exception as e:
+            print(f"Error loading from database: {e}")
+            if conn:
+                conn.close()
+    
+    # Fallback to file (for local development without database)
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -42,21 +121,91 @@ def load_baseline():
     return set()
 
 def save_baseline(listing_ids):
-    """Save the baseline listing IDs to file"""
+    """Save the baseline listing IDs to database or file fallback"""
+    # Try database first
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            # Clear existing baseline
+            cur.execute("DELETE FROM baseline_listings")
+            # Insert new baseline
+            for listing_id in listing_ids:
+                cur.execute(
+                    "INSERT INTO baseline_listings (listing_id) VALUES (%s) ON CONFLICT (listing_id) DO NOTHING",
+                    (listing_id,)
+                )
+            conn.commit()
+            cur.close()
+            conn.close()
+            print(f"Saved {len(listing_ids)} baseline listings to database")
+            return
+        except Exception as e:
+            print(f"Error saving to database: {e}")
+            if conn:
+                conn.close()
+    
+    # Fallback to file (for local development without database)
     data = {
         'listing_ids': list(listing_ids),
         'last_updated': datetime.now().isoformat()
     }
-    
-    # Note: On Render's free tier, the filesystem is ephemeral
-    # Files persist during the service's lifetime but are lost on restart
-    # The baseline will be re-initialized on restart (first check creates new baseline)
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        print(f"Baseline saved: {len(listing_ids)} listings")
+        print(f"Baseline saved to file: {len(listing_ids)} listings")
     except Exception as e:
         print(f"Warning: Could not save baseline to file: {e}")
+
+def save_new_listing(listing):
+    """Save a new listing to database"""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO new_listings (listing_id, url, title, price, location, description, detected_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (
+                listing['id'],
+                listing['url'],
+                listing.get('title', ''),
+                listing.get('price', ''),
+                listing.get('location', ''),
+                listing.get('description', ''),
+                datetime.fromisoformat(listing.get('detected_at', datetime.now().isoformat()))
+            ))
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Error saving new listing to database: {e}")
+            if conn:
+                conn.close()
+
+def load_new_listings_from_db():
+    """Load new listings from database"""
+    conn = get_db_connection()
+    if conn:
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            cur.execute("""
+                SELECT listing_id as id, url, title, price, location, description, 
+                       detected_at::text as detected_at
+                FROM new_listings
+                ORDER BY detected_at DESC
+                LIMIT 100
+            """)
+            rows = cur.fetchall()
+            listings = [dict(row) for row in rows]
+            cur.close()
+            conn.close()
+            return listings
+        except Exception as e:
+            print(f"Error loading new listings from database: {e}")
+            if conn:
+                conn.close()
+    return []
 
 def extract_listings():
     """Extract listing information from the page"""
@@ -193,6 +342,8 @@ def check_for_new_listings():
             # Add timestamp to each new listing
             for listing in new_listings_data:
                 listing['detected_at'] = datetime.now().isoformat()
+                # Save to database
+                save_new_listing(listing)
             
             # Prepend new listings to the list (most recent first)
             new_listings = new_listings_data + new_listings
@@ -211,6 +362,19 @@ def check_for_new_listings():
     finally:
         is_checking = False
 
+# Initialize database on startup
+def init_app():
+    """Initialize database and load existing data"""
+    if DATABASE_URL:
+        print("Initializing database...")
+        if init_database():
+            print("Loading new listings from database...")
+            global new_listings
+            new_listings = load_new_listings_from_db()
+            print(f"Loaded {len(new_listings)} existing new listings from database")
+    else:
+        print("No DATABASE_URL found - using file-based storage (data will be lost on restart)")
+
 # Initialize scheduler
 scheduler = BackgroundScheduler()
 scheduler.add_job(
@@ -228,6 +392,8 @@ def initial_check():
     time.sleep(5)  # Wait for app to start
     check_for_new_listings()
 
+# Initialize app
+init_app()
 threading.Thread(target=initial_check, daemon=True).start()
 
 @app.route('/')
