@@ -8,6 +8,15 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import threading
 import time
 
+# Try to import cloudscraper for better anti-bot handling
+try:
+    import cloudscraper
+    CLOUDSCRAPER_AVAILABLE = True
+except ImportError:
+    print("Warning: cloudscraper not available. Install it for better anti-bot handling: pip install cloudscraper")
+    CLOUDSCRAPER_AVAILABLE = False
+    cloudscraper = None
+
 # Try to import psycopg2, but make it optional
 try:
     import psycopg2
@@ -226,69 +235,146 @@ def load_new_listings_from_db():
 def extract_listings():
     """Extract listing information from the page"""
     try:
-        # More realistic browser headers to avoid 403 errors
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Accept-Language': 'en-US,en;q=0.9,hy;q=0.8',
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-            'Referer': 'https://www.list.am/',
-            'DNT': '1',
-        }
-        
-        # Create a session to maintain cookies
-        session = requests.Session()
-        session.headers.update(headers)
-        
-        # First, visit the main page to get cookies
-        try:
-            session.get('https://www.list.am/', timeout=10)
-        except:
-            pass  # Continue even if this fails
-        
-        # Small delay to appear more human-like
-        time.sleep(1)
-        
-        # Now get the actual page
-        response = session.get(LIST_AM_URL, timeout=30)
-        
-        # Check for 403 and handle gracefully
-        if response.status_code == 403:
-            print("Warning: Got 403 Forbidden. The website may be blocking requests.")
-            print("Trying with different approach...")
-            # Try without some headers
-            simple_headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        # Try multiple approaches to avoid blocking
+        approaches = [
+            # Approach 1: Full browser headers
+            {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9,hy;q=0.8,ru;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br, zstd',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+            },
+            # Approach 2: Simpler headers
+            {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
+            },
+            # Approach 3: Minimal headers
+            {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             }
-            response = requests.get(LIST_AM_URL, headers=simple_headers, timeout=30)
+        ]
         
-        if response.status_code != 200:
-            print(f"Error: Got status code {response.status_code}")
+        response = None
+        
+        # First, try cloudscraper if available (best for bypassing Cloudflare/anti-bot)
+        if CLOUDSCRAPER_AVAILABLE:
+            try:
+                print("Trying cloudscraper to bypass anti-bot measures...")
+                scraper = cloudscraper.create_scraper(
+                    browser={
+                        'browser': 'chrome',
+                        'platform': 'darwin',
+                        'desktop': True
+                    }
+                )
+                response = scraper.get(LIST_AM_URL, timeout=30)
+                if response.status_code == 200:
+                    print("Successfully fetched page using cloudscraper")
+                else:
+                    print(f"Cloudscraper got status {response.status_code}, trying other approaches...")
+                    response = None
+            except Exception as e:
+                print(f"Cloudscraper error: {e}, trying other approaches...")
+                response = None
+        
+        # If cloudscraper didn't work, try regular requests with different headers
+        if not response or response.status_code != 200:
+            for i, headers in enumerate(approaches):
+                try:
+                    session = requests.Session()
+                    session.headers.update(headers)
+                    
+                    # First, visit the main page to get cookies
+                    try:
+                        session.get('https://www.list.am/', timeout=10)
+                        time.sleep(0.5)  # Small delay
+                    except:
+                        pass
+                    
+                    # Now get the actual page
+                    response = session.get(LIST_AM_URL, timeout=30, allow_redirects=True)
+                    
+                    if response.status_code == 200:
+                        print(f"Successfully fetched page using approach {i+1}")
+                        break
+                    elif response.status_code == 403:
+                        print(f"Got 403 with approach {i+1}, trying next...")
+                        continue
+                    else:
+                        print(f"Got status {response.status_code} with approach {i+1}, trying next...")
+                        continue
+                except Exception as e:
+                    print(f"Error with approach {i+1}: {e}")
+                    continue
+        
+        if not response or response.status_code != 200:
+            error_msg = f"Failed to fetch page. Status: {response.status_code if response else 'No response'}"
+            print(error_msg)
             return [], set()
-        
-        response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         listings = []
         seen_ids = set()
         
-        # Find all listing links - they have URLs like /item/12345678
-        listing_links = soup.find_all('a', href=lambda x: x and '/item/' in x)
+        # Try multiple selectors to find listings
+        # Method 1: Find all listing links - they have URLs like /item/12345678
+        listing_links = soup.find_all('a', href=lambda x: x and '/item/' in str(x))
+        
+        # Method 2: If no links found, try finding divs with data attributes or specific classes
+        if not listing_links:
+            print("No links with /item/ found, trying alternative selectors...")
+            # Try finding elements with item IDs in data attributes
+            items_with_data = soup.find_all(attrs={'data-id': True})
+            for item in items_with_data:
+                item_id = item.get('data-id')
+                if item_id and item_id.isdigit():
+                    # Try to find link within this element
+                    link = item.find('a', href=lambda x: x and '/item/' in str(x))
+                    if link:
+                        listing_links.append(link)
+        
+        # Method 3: Try finding by class names that might contain listings
+        if not listing_links:
+            print("Trying to find listings by class names...")
+            # Common class patterns for listing containers
+            possible_containers = soup.find_all(['div', 'article'], class_=lambda x: x and any(
+                keyword in str(x).lower() for keyword in ['item', 'listing', 'ad', 'card', 'product']
+            ))
+            for container in possible_containers:
+                link = container.find('a', href=lambda x: x and '/item/' in str(x))
+                if link and link not in listing_links:
+                    listing_links.append(link)
+        
+        print(f"Found {len(listing_links)} potential listing links")
         
         for link in listing_links:
             href = link.get('href', '')
+            if not href:
+                continue
+                
+            # Handle both relative and absolute URLs
+            if href.startswith('/'):
+                full_href = f"https://www.list.am{href}"
+            elif href.startswith('http'):
+                full_href = href
+            else:
+                continue
+            
             if '/item/' in href:
                 # Extract item ID from URL like /item/21414358?ld_src=2
-                item_id = href.split('/item/')[1].split('?')[0].split('&')[0]
+                try:
+                    item_id = href.split('/item/')[1].split('?')[0].split('&')[0].strip()
+                except:
+                    continue
                 
                 if item_id and item_id.isdigit() and item_id not in seen_ids:
                     seen_ids.add(item_id)
@@ -296,7 +382,7 @@ def extract_listings():
                     # Extract listing details
                     listing_data = {
                         'id': item_id,
-                        'url': f"https://www.list.am{href.split('?')[0]}",
+                        'url': full_href.split('?')[0],
                         'title': '',
                         'price': '',
                         'location': '',
@@ -306,35 +392,46 @@ def extract_listings():
                     # Get the full text content of the link
                     link_text = link.get_text(separator=' ', strip=True)
                     
-                    # Extract price (usually at the start: $XXX,XXX or XXX,XXX ֏)
+                    # Extract price (usually at the start: $XXX,XXX or XXX,XXX ֏ or AMD)
                     import re
-                    price_match = re.search(r'(\$[\d,]+|[\d,]+ ֏)', link_text)
+                    price_patterns = [
+                        r'(\$[\d,]+)',
+                        r'([\d,]+ ֏)',
+                        r'([\d,]+ AMD)',
+                        r'([\d,]+ դր)',
+                    ]
+                    price_match = None
+                    for pattern in price_patterns:
+                        price_match = re.search(pattern, link_text)
+                        if price_match:
+                            break
+                    
                     if price_match:
                         listing_data['price'] = price_match.group(1)
                         # Remove price from text to get title
-                        link_text = link_text.replace(price_match.group(1), '', 1).strip()
+                        for pattern in price_patterns:
+                            link_text = re.sub(pattern, '', link_text, count=1).strip()
+                            if price_match.group(1) not in link_text:
+                                break
                     
                     # The link text usually contains: price + type + description
-                    # Split and extract
-                    parts = link_text.split(' ', 2)
-                    if len(parts) >= 2:
-                        listing_data['title'] = ' '.join(parts[1:]) if len(parts) > 1 else link_text
-                    else:
-                        listing_data['title'] = link_text
+                    listing_data['title'] = link_text if link_text else f"Listing {item_id}"
                     
                     # Look for location/description in parent container
                     parent = link.parent
-                    if parent:
+                    max_depth = 3
+                    depth = 0
+                    while parent and depth < max_depth:
                         # Find all text in the parent container
                         parent_texts = []
-                        for elem in parent.find_all(['div', 'span', 'p', 'generic']):
+                        for elem in parent.find_all(['div', 'span', 'p'], recursive=False):
                             text = elem.get_text(separator=' ', strip=True)
-                            if text and len(text) > 5:
+                            if text and len(text) > 5 and text not in link_text:
                                 parent_texts.append(text)
                         
                         # Look for location info (contains district names or քմ, սեն)
                         districts = ['Կենտրոն', 'Արաբկիր', 'Աջափնյակ', 'Շենգավիթ', 'Նոր Նորք', 
-                                    'Մալաթիա', 'Դավթաշեն', 'Ավան', 'Էրեբունի', 'Զովունի']
+                                    'Մալաթիա', 'Դավթաշեն', 'Ավան', 'Էրեբունի', 'Զովունի', 'Դավիթաշեն']
                         for text in parent_texts:
                             # Check if it's location info
                             if any(district in text for district in districts) or ('քմ' in text and 'սեն' in text):
@@ -343,6 +440,12 @@ def extract_listings():
                             # Otherwise use as description if we don't have one
                             elif not listing_data['description'] and len(text) > 20:
                                 listing_data['description'] = text
+                        
+                        if listing_data['location'] or listing_data['description']:
+                            break
+                            
+                        parent = parent.parent
+                        depth += 1
                     
                     # If we still don't have description, use title
                     if not listing_data['description']:
@@ -350,7 +453,13 @@ def extract_listings():
                     
                     listings.append(listing_data)
         
-        print(f"Extracted {len(listings)} listings")
+        print(f"Extracted {len(listings)} unique listings")
+        if len(listings) == 0 and len(listing_links) > 0:
+            print(f"Warning: Found {len(listing_links)} links but extracted 0 listings. HTML structure may have changed.")
+            # Debug: print first few links
+            for i, link in enumerate(listing_links[:3]):
+                print(f"  Link {i+1}: href={link.get('href', '')[:100]}")
+        
         return listings, seen_ids
     except Exception as e:
         print(f"Error extracting listings: {str(e)}")
@@ -374,8 +483,12 @@ def check_for_new_listings():
         extracted_listings, current_ids = extract_listings()
         
         if not current_ids:
-            print("No listings found. Skipping check.")
-            last_check_status = "Error: No listings found"
+            print("No listings found. This could mean:")
+            print("  1. The website is blocking requests (403 error)")
+            print("  2. The HTML structure has changed")
+            print("  3. There are no listings on the page")
+            print("  4. Network connectivity issues")
+            last_check_status = "Error: No listings found. Website may be blocking requests or HTML structure changed."
             is_checking = False
             return
         

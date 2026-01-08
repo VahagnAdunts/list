@@ -3,4 +3,5 @@ beautifulsoup4==4.12.2
 requests==2.31.0
 APScheduler==3.10.4
 psycopg2-binary==2.9.10
+cloudscraper==1.2.71
 
