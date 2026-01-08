@@ -338,8 +338,9 @@ def check_for_new_listings():
             is_checking = False
             return
         
-        # Store last 10 current listings (for display)
-        current_listings = extracted_listings[:10]
+        # Store last 10 current listings (for display) - update global
+        current_listings.clear()
+        current_listings.extend(extracted_listings[:10])
         print(f"Found {len(current_ids)} total listings on page")
         
         # Load baseline
