@@ -32,8 +32,11 @@ DATABASE_URL = os.environ.get('DATABASE_URL')  # Render provides this automatica
 
 # Store for new listings (in-memory cache)
 new_listings = []
+# Store for current listings (last 10 shown on page)
+current_listings = []
 last_check_time = None
 is_checking = False
+last_check_status = "Not checked yet"
 
 def get_db_connection():
     """Get database connection"""
@@ -316,7 +319,7 @@ def extract_listings():
 
 def check_for_new_listings():
     """Check for new listings and update the baseline"""
-    global new_listings, last_check_time, is_checking
+    global new_listings, current_listings, last_check_time, is_checking, last_check_status
     
     if is_checking:
         return
@@ -324,14 +327,20 @@ def check_for_new_listings():
     is_checking = True
     try:
         print(f"Checking for new listings at {datetime.now()}")
+        last_check_status = "Checking..."
         
         # Extract current listings
-        current_listings, current_ids = extract_listings()
+        extracted_listings, current_ids = extract_listings()
         
         if not current_ids:
             print("No listings found. Skipping check.")
+            last_check_status = "Error: No listings found"
             is_checking = False
             return
+        
+        # Store last 10 current listings (for display)
+        current_listings = extracted_listings[:10]
+        print(f"Found {len(current_ids)} total listings on page")
         
         # Load baseline
         baseline_ids = load_baseline()
@@ -342,6 +351,7 @@ def check_for_new_listings():
             save_baseline(current_ids)
             new_listings = []
             last_check_time = datetime.now()
+            last_check_status = f"Baseline initialized with {len(current_ids)} listings"
             is_checking = False
             return
         
@@ -350,7 +360,7 @@ def check_for_new_listings():
         
         if new_ids:
             print(f"Found {len(new_ids)} new listing(s)!")
-            new_listings_data = [listing for listing in current_listings if listing['id'] in new_ids]
+            new_listings_data = [listing for listing in extracted_listings if listing['id'] in new_ids]
             
             # Add timestamp to each new listing
             for listing in new_listings_data:
@@ -366,12 +376,17 @@ def check_for_new_listings():
             
             # Update baseline
             save_baseline(current_ids)
+            last_check_status = f"Found {len(new_ids)} new listing(s)!"
         else:
             print("No new listings found.")
+            last_check_status = f"Checked {len(current_ids)} listings - no new ones"
         
         last_check_time = datetime.now()
     except Exception as e:
         print(f"Error checking for new listings: {str(e)}")
+        last_check_status = f"Error: {str(e)}"
+        import traceback
+        traceback.print_exc()
     finally:
         is_checking = False
 
@@ -413,16 +428,20 @@ threading.Thread(target=initial_check, daemon=True).start()
 def index():
     """Main page showing new listings"""
     return render_template('index.html', 
-                         listings=new_listings, 
+                         listings=new_listings,
+                         current_listings=current_listings,
                          last_check=last_check_time,
+                         last_check_status=last_check_status,
                          check_interval=CHECK_INTERVAL)
 
 @app.route('/api/listings')
 def api_listings():
     """API endpoint for listings"""
     return jsonify({
-        'listings': new_listings,
+        'new_listings': new_listings,
+        'current_listings': current_listings,
         'last_check': last_check_time.isoformat() if last_check_time else None,
+        'last_check_status': last_check_status,
         'check_interval': CHECK_INTERVAL
     })
 

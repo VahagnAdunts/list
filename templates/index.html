@@ -231,6 +231,11 @@
                             Not checked yet
                         {% endif %}
                     </span>
+                    {% if last_check_status and last_check_status != "Not checked yet" %}
+                    <div style="font-size: 0.85em; color: #666; margin-top: 5px;">
+                        {{ last_check_status }}
+                    </div>
+                    {% endif %}
                 </div>
                 <div class="status-item">
                     <strong>Check Interval</strong>
@@ -240,6 +245,12 @@
             
             <button class="btn" onclick="checkNow()">Check Now</button>
         </div>
+        
+        {% if listings %}
+        <div style="background: white; border-radius: 12px; padding: 20px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+            <h2 style="color: #333; margin-bottom: 15px;">🆕 New Listings ({{ listings|length }})</h2>
+        </div>
+        {% endif %}
         
         <div class="listings-container">
             {% if listings %}
@@ -272,13 +283,47 @@
                     </div>
                 </div>
                 {% endfor %}
-            {% else %}
-                <div class="no-listings">
-                    <h2>No new listings yet</h2>
-                    <p>The system is monitoring for new listings. Check back soon!</p>
-                </div>
             {% endif %}
         </div>
+        
+        {% if current_listings %}
+        <div style="background: white; border-radius: 12px; padding: 20px; margin-top: 30px; margin-bottom: 20px; box-shadow: 0 5px 15px rgba(0,0,0,0.1);">
+            <h2 style="color: #333; margin-bottom: 15px;">📋 Current Listings (Last 10 from List.am)</h2>
+            <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">These are the current listings on the page. New listings will appear above when detected.</p>
+        </div>
+        
+        <div class="listings-container">
+            {% for listing in current_listings %}
+                <div class="listing-card">
+                    <div class="listing-header">
+                        <div class="listing-price">{{ listing.price or 'Price not available' }}</div>
+                        <div class="listing-id">ID: {{ listing.id }}</div>
+                    </div>
+                    
+                    {% if listing.title %}
+                    <div class="listing-title">{{ listing.title }}</div>
+                    {% endif %}
+                    
+                    {% if listing.description %}
+                    <div class="listing-description">{{ listing.description }}</div>
+                    {% endif %}
+                    
+                    {% if listing.location %}
+                    <div class="listing-location">📍 {{ listing.location }}</div>
+                    {% endif %}
+                    
+                    <div class="listing-footer">
+                        <a href="{{ listing.url }}" target="_blank" class="listing-link">View on List.am →</a>
+                    </div>
+                </div>
+            {% endfor %}
+        </div>
+        {% elif not listings %}
+        <div class="no-listings">
+            <h2>No listings yet</h2>
+            <p>The system is monitoring for new listings. Click "Check Now" to perform the first check!</p>
+        </div>
+        {% endif %}
     </div>
     
     <script>
