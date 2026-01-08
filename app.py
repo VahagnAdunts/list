@@ -21,7 +21,17 @@ last_check_time = None
 is_checking = False
 
 def load_baseline():
-    """Load the baseline listing IDs from file"""
+    """Load the baseline listing IDs from environment variable or file"""
+    # Try environment variable first (persists on Render)
+    baseline_env = os.environ.get('BASELINE_LISTINGS')
+    if baseline_env:
+        try:
+            data = json.loads(baseline_env)
+            return set(data.get('listing_ids', []))
+        except:
+            pass
+    
+    # Fallback to file (for local development)
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, 'r', encoding='utf-8') as f:
@@ -37,8 +47,16 @@ def save_baseline(listing_ids):
         'listing_ids': list(listing_ids),
         'last_updated': datetime.now().isoformat()
     }
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    
+    # Note: On Render's free tier, the filesystem is ephemeral
+    # Files persist during the service's lifetime but are lost on restart
+    # The baseline will be re-initialized on restart (first check creates new baseline)
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(f"Baseline saved: {len(listing_ids)} listings")
+    except Exception as e:
+        print(f"Warning: Could not save baseline to file: {e}")
 
 def extract_listings():
     """Extract listing information from the page"""

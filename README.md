@@ -112,10 +112,15 @@ You can modify the following in `app.py`:
 
 ## Notes
 
-- The app stores the baseline in `listings_data.json` (persists across restarts on Render)
+- **Data Persistence**: On Render's free tier, the filesystem is ephemeral. The `listings_data.json` file persists during the service's lifetime but will be lost if the service restarts. When this happens, the app will re-initialize the baseline on the first check (so you won't see "new" listings until actual new ones appear after the baseline is set).
 - New listings are kept in memory (last 100 listings)
 - The page auto-refreshes every 5 minutes
 - Make sure your filters are applied in the URL before deploying
+
+**For persistent storage** (optional):
+- You can add a PostgreSQL database on Render (free tier available)
+- Or use Render's persistent disk (paid feature)
+- The current file-based approach works fine for most use cases - the baseline just resets on restart
 
 ## Troubleshooting
 
