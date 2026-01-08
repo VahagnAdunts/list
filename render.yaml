@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: list-am-monitor
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py
+    envVars:
+      - key: PORT
+        sync: false
+      - key: LIST_AM_URL
+        value: https://www.list.am/category/60
+      - key: CHECK_INTERVAL
+        value: 30
+      - key: DATA_FILE
+        value: listings_data.json
+
