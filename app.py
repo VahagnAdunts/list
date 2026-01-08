@@ -7,9 +7,18 @@ from datetime import datetime
 from apscheduler.schedulers.background import BackgroundScheduler
 import threading
 import time
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from urllib.parse import urlparse
+
+# Try to import psycopg2, but make it optional
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    PSYCOPG2_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: psycopg2 not available: {e}")
+    print("Falling back to file-based storage")
+    PSYCOPG2_AVAILABLE = False
+    psycopg2 = None
+    RealDictCursor = None
 
 app = Flask(__name__)
 
@@ -28,7 +37,7 @@ is_checking = False
 
 def get_db_connection():
     """Get database connection"""
-    if not DATABASE_URL:
+    if not PSYCOPG2_AVAILABLE or not DATABASE_URL:
         return None
     try:
         conn = psycopg2.connect(DATABASE_URL, sslmode='require')
@@ -159,6 +168,8 @@ def save_baseline(listing_ids):
 
 def save_new_listing(listing):
     """Save a new listing to database"""
+    if not PSYCOPG2_AVAILABLE:
+        return
     conn = get_db_connection()
     if conn:
         try:
@@ -185,6 +196,8 @@ def save_new_listing(listing):
 
 def load_new_listings_from_db():
     """Load new listings from database"""
+    if not PSYCOPG2_AVAILABLE:
+        return []
     conn = get_db_connection()
     if conn:
         try:
